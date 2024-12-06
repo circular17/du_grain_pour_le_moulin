@@ -21,14 +21,14 @@ function priv_lazbuild
         esac
     fi
     declare -r COMPONENTS='use/components.txt'
-    if [[ -f "${COMPONENTS%%/*}" ]]; then
+    if [[ -d "${COMPONENTS%%/*}" ]]; then
         git submodule update --init --recursive --force --remote
         if [[ -f "${COMPONENTS}" ]]; then
             while read -r; do
                 if [[ -n "${REPLY}" ]] &&
                     ! (lazbuild --verbose-pkgsearch "${REPLY}") &&
                     ! (lazbuild --add-package "${REPLY}") &&
-                    ! [[ -f "${COMPONENTS%%/*}/${REPLY}" ]]; then
+                    ! [[ -d "${COMPONENTS%%/*}/${REPLY}" ]]; then
                         declare -A VAR=(
                             [url]="https://packages.lazarus-ide.org/${REPLY}.zip"
                             [out]=$(mktemp)
