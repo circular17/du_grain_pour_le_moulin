@@ -1,5 +1,8 @@
-**/backup/
-**/use/*/
-**/lib/
+src/backup/
+src/lib/
+src/bin/
 src/*.lps
 src/*.res
+src/*.o
+src/*.ppu
+use/*/
