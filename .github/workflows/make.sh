@@ -68,7 +68,7 @@ function priv_lazbuild
     declare -i exitCode=0
     if [[ -d "${VAR[tst]}" ]]; then
         while read -r; do
-            export INSTANTFPC="${VAR[opt]}"
+            export INSTANTFPCOPTIONS="${VAR[opt]}"
             if ! (instantfpc "${REPLY%}" --all >&2); then
                 ((exitCode+=1))
             fi
