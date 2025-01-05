@@ -51,6 +51,7 @@ Function Build-Project {
         ! (& lazbuild --add-package $_.Name)
     } | ForEach-Object -Parallel {
         Invoke-WebRequest -OutFile $_.OutFile -Uri $_.Uri
+        New-Item -Type Directory -Path $_.Path
         Expand-Archive -Path $_.OutFile -DestinationPath $_.Path
         Remove-Item $_.OutFile
         Return "$([char]27)[33m.... download $($_.Uri)$([char]27)[0m"
