@@ -53,6 +53,7 @@ function priv_lazbuild
                ! (lazbuild --verbose-pkgsearch "${REPLY}") &&
                ! (lazbuild --add-package "${REPLY}"); then
                     wget --quiet --output-document "${TMP[out]}" "${TMP[url]}"
+                    mkdir --parents "${TMP[dir]}"
                     unzip -o "${TMP[out]}" -d "${TMP[dir]}"
                     rm --verbose "${TMP[out]}"
                     find "${TMP[dir]}" -type 'f' -name '*.lpk' -printf '\033[33m\tadd package link\t%p\033[0m\n' -exec \
@@ -93,7 +94,7 @@ function priv_lazbuild
 
 function priv_main
 (
-    set -xeuo pipefail
+    set -euo pipefail
     if ((${#})); then
         case ${1} in
             build) priv_lazbuild ;;
