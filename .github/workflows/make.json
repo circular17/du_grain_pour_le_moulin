@@ -3,6 +3,6 @@
     "lib" : "use",
     "tst" : "tst",
     "pkg" : [
-        'UniqueInstance'
+        'UniqueInstance',
     ]
 }
