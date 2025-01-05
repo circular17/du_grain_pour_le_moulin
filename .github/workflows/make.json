@@ -2,8 +2,8 @@
     "app" : "src",
     "lib" : "use",
     "tst" : "tst",
-    "opt" : "-Fu../src/*/;"
+    "opt" : "-Fu../src/*/;",
     "pkg" : [
-        'UniqueInstance',
-    ],
+        "UniqueInstance"
+    ]
 }
