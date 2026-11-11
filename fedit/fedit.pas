@@ -68,12 +68,34 @@ begin
   Halt(2);
 end;
 
+{ On Windows, turns POSIX-style drive paths (/c/dir, /mnt/c/dir, /cygdrive/c/dir) into C:\dir. }
+function ResolvePath(const Path: string): string;
+var
+  Prefix: string;
+  Rest: string;
+begin
+  Result := Path;
+  {$IFDEF MSWINDOWS}
+  Prefix := '';
+  if Copy(Path, 1, 5) = '/mnt/' then
+    Prefix := '/mnt'
+  else if Copy(Path, 1, 10) = '/cygdrive/' then
+    Prefix := '/cygdrive';
+  Rest := Copy(Path, Length(Prefix) + 1, Length(Path));
+  if (Length(Rest) >= 2) and (Rest[1] = '/') and (UpCase(Rest[2]) in ['A'..'Z'])
+    and ((Length(Rest) = 2) or (Rest[3] = '/')) then
+    Result := UpCase(Rest[2]) + ':' + StringReplace(Copy(Rest, 3, Length(Rest)), '/', '\', [rfReplaceAll]);
+  {$ENDIF}
+end;
+
 { Reads a whole file as raw bytes. }
-function ReadAllBytes(const Path: string): RawByteString;
+function ReadAllBytes(const PathArg: string): RawByteString;
 var
   Stream: TFileStream;
+  Path: string;
 begin
   Result := '';
+  Path := ResolvePath(PathArg);
   if not FileExists(Path) then
     Fail('file not found: ' + Path);
   Stream := TFileStream.Create(Path, fmOpenRead or fmShareDenyNone);
@@ -372,7 +394,7 @@ begin
         begin
           Inc(FileCount);
           SetLength(Result, FileCount);
-          Result[FileCount - 1].Path := Trim(Copy(Line, 5, Length(Line)));
+          Result[FileCount - 1].Path := ResolvePath(Trim(Copy(Line, 5, Length(Line))));
           HaveFile := True;
         end
         else if Copy(Line, 1, 4) = '<<<<' then
