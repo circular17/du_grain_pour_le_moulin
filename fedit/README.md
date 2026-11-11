@@ -8,6 +8,7 @@ Compilation (FreePascal) : `fpc -O2 -Xs fedit.pas`
 
 ```
 fedit info FICHIER...
+fedit cat [-n] FICHIER [A-B]
 fedit apply [--dry-run] [--check "COMMANDE {}"] PATCH|-
 ```
 
@@ -24,3 +25,5 @@ remplacement
 
 Tout ou rien : si un bloc ne trouve pas le nombre attendu d'occurrences,
 aucun fichier n'est modifié. Les fichiers à fins de ligne mixtes sont refusés.
+
+`cat` affiche un fichier en UTF-8, fins de ligne LF, sans BOM (le format détecté va sur stderr) ; `A-B` limite aux lignes demandées et `-n` numérote.

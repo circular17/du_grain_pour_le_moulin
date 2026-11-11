@@ -8,6 +8,7 @@ program fedit;
 
   Usage:
     fedit info FILE...
+    fedit cat [-n] FILE [A-B]
     fedit apply [--dry-run] [--check "COMMAND (braces = file)"] PATCHFILE|-
     fedit help
 
@@ -213,6 +214,33 @@ begin
     Res[Count] := Chr(Mapped);
   end;
   SetLength(Res, Count);
+end;
+
+{ Converts Windows-1252 bytes to UTF-8 (undefined bytes become '?'). }
+function Cp1252ToUtf8(const S: RawByteString): RawByteString;
+var
+  I: Integer;
+  B: Byte;
+  CodePoint: Cardinal;
+begin
+  Result := '';
+  for I := 1 to Length(S) do
+  begin
+    B := Ord(S[I]);
+    if (B >= $80) and (B <= $9F) then
+      CodePoint := Cp1252High[B - $80]
+    else
+      CodePoint := B;
+    if CodePoint = 0 then
+      CodePoint := Ord('?');
+    if CodePoint < $80 then
+      Result := Result + Chr(CodePoint)
+    else if CodePoint < $800 then
+      Result := Result + Chr($C0 or (CodePoint shr 6)) + Chr($80 or (CodePoint and $3F))
+    else
+      Result := Result + Chr($E0 or (CodePoint shr 12))
+        + Chr($80 or ((CodePoint shr 6) and $3F)) + Chr($80 or (CodePoint and $3F));
+  end;
 end;
 
 { Detects BOM, encoding and line endings of Raw; Body is Raw without BOM. }
@@ -469,6 +497,92 @@ begin
   end;
 end;
 
+{ Parses a line range "A-B", "A-", "-B" or "A" into 1-based bounds (High = open end). }
+procedure ParseRange(const Spec: string; out First, Last: Integer);
+var
+  Dash: Integer;
+begin
+  First := 1;
+  Last := MaxInt;
+  Dash := Pos('-', Spec);
+  if Dash = 0 then
+  begin
+    First := StrToIntDef(Spec, -1);
+    Last := First;
+  end
+  else
+  begin
+    if Dash > 1 then
+      First := StrToIntDef(Copy(Spec, 1, Dash - 1), -1);
+    if Dash < Length(Spec) then
+      Last := StrToIntDef(Copy(Spec, Dash + 1, Length(Spec)), -1);
+  end;
+  if (First < 1) or (Last < First) then
+    Fail('bad line range: ' + Spec);
+end;
+
+{ Prints a file as UTF-8 with LF endings and no BOM; the format goes to stderr. }
+procedure CmdCat;
+var
+  First, Last, ArgIndex, LineNumber, Start, Stop: Integer;
+  ShowNumbers: Boolean;
+  Path, RangeSpec: string;
+  Raw, Body, Output: RawByteString;
+  Fmt: TFileFormat;
+  Stream: THandleStream;
+begin
+  ShowNumbers := False;
+  Path := '';
+  RangeSpec := '';
+  for ArgIndex := 2 to ParamCount do
+  begin
+    if ParamStr(ArgIndex) = '-n' then
+      ShowNumbers := True
+    else if Path = '' then
+      Path := ParamStr(ArgIndex)
+    else
+      RangeSpec := ParamStr(ArgIndex);
+  end;
+  if Path = '' then
+    Fail('cat: no file given');
+  First := 1;
+  Last := MaxInt;
+  if RangeSpec <> '' then
+    ParseRange(RangeSpec, First, Last);
+  Raw := ReadAllBytes(Path);
+  DetectFormat(Raw, Fmt, Body);
+  Body := ReplaceAll(Body, #13#10, #10);
+  if Fmt.IsCp1252 then
+    Body := Cp1252ToUtf8(Body);
+  WriteLn(StdErr, '# ', FormatName(Fmt));
+  Output := '';
+  LineNumber := 1;
+  Start := 1;
+  while (Start <= Length(Body)) and (LineNumber <= Last) do
+  begin
+    Stop := PosEx(#10, Body, Start);
+    if Stop = 0 then
+      Stop := Length(Body) + 1;
+    if LineNumber >= First then
+    begin
+      if ShowNumbers then
+        Output := Output + IntToStr(LineNumber) + #9;
+      Output := Output + Copy(Body, Start, Stop - Start) + #10;
+    end;
+    Inc(LineNumber);
+    Start := Stop + 1;
+  end;
+  if Length(Output) > 0 then
+  begin
+    Stream := THandleStream.Create(StdOutputHandle);
+    try
+      Stream.WriteBuffer(Output[1], Length(Output));
+    finally
+      Stream.Free;
+    end;
+  end;
+end;
+
 { Applies a patch file: all-or-nothing, format preserving. }
 procedure CmdApply;
 var
@@ -581,6 +695,7 @@ procedure CmdHelp;
 begin
   WriteLn('fedit - format-preserving text patcher');
   WriteLn('  fedit info FILE...');
+  WriteLn('  fedit cat [-n] FILE [A-B]     (prints as UTF-8, LF, no BOM)');
   WriteLn('  fedit apply [--dry-run] [--check "CMD {}"] PATCHFILE|-');
   WriteLn;
   WriteLn('Patch file (UTF-8, no escaping):');
@@ -601,6 +716,7 @@ begin
   end;
   case LowerCase(ParamStr(1)) of
     'info': CmdInfo;
+    'cat': CmdCat;
     'apply': CmdApply;
     'help', '--help', '-h': CmdHelp;
   else
