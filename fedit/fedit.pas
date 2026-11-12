@@ -363,14 +363,15 @@ function ParsePatch(const PatchText: RawByteString): TFilePatchArray;
 var
   Lines: TStringList;
   Buffer: RawByteString;
-  I, State, BlockCount, FileCount: Integer;
-  Line, Rest: string;
+  I, J, State, BlockCount, FileCount, CurFile: Integer;
+  Line, Rest, HeaderPath: string;
   Collected: TStringList;
   Current: TBlock;
   HaveFile: Boolean;
 begin
   Result := nil;
   FileCount := 0;
+  CurFile := -1;
   HaveFile := False;
   State := 0; { 0 = between blocks, 1 = in OLD, 2 = in NEW }
   Buffer := PatchText;
@@ -392,9 +393,24 @@ begin
       begin
         if Copy(Line, 1, 4) = '@@@ ' then
         begin
-          Inc(FileCount);
-          SetLength(Result, FileCount);
-          Result[FileCount - 1].Path := ResolvePath(Trim(Copy(Line, 5, Length(Line))));
+          { A file named by several headers keeps one section: its blocks apply in
+            order to the same text (otherwise each section would start again from the
+            file on disk and the last one written would erase the others). }
+          HeaderPath := ResolvePath(Trim(Copy(Line, 5, Length(Line))));
+          CurFile := -1;
+          for J := 0 to FileCount - 1 do
+            if SameFileName(ExpandFileName(Result[J].Path), ExpandFileName(HeaderPath)) then
+            begin
+              CurFile := J;
+              Break;
+            end;
+          if CurFile < 0 then
+          begin
+            Inc(FileCount);
+            SetLength(Result, FileCount);
+            CurFile := FileCount - 1;
+            Result[CurFile].Path := HeaderPath;
+          end;
           HaveFile := True;
         end
         else if Copy(Line, 1, 4) = '<<<<' then
@@ -436,9 +452,9 @@ begin
           Current.NewText := JoinLines(Collected);
           if Current.OldText = '' then
             Fail(Format('patch line %d: empty search text', [Current.Line]));
-          BlockCount := Length(Result[FileCount - 1].Blocks);
-          SetLength(Result[FileCount - 1].Blocks, BlockCount + 1);
-          Result[FileCount - 1].Blocks[BlockCount] := Current;
+          BlockCount := Length(Result[CurFile].Blocks);
+          SetLength(Result[CurFile].Blocks, BlockCount + 1);
+          Result[CurFile].Blocks[BlockCount] := Current;
           State := 0;
         end
         else

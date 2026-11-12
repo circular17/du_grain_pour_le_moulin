@@ -23,9 +23,16 @@ remplacement
 >>>>
 ```
 
+Un même fichier peut apparaître sous plusieurs en-têtes `@@@` (chemins écrits
+différemment compris) : ses blocs s'appliquent dans l'ordre sur le même texte,
+chacun voyant le résultat des précédents. Avant la correction, la dernière
+section écrasait silencieusement les précédentes.
+
 Tout ou rien : si un bloc ne trouve pas le nombre attendu d'occurrences,
 aucun fichier n'est modifié. Les fichiers à fins de ligne mixtes sont refusés.
 
 Sous Windows, les chemins POSIX (`/c/dossier`, `/mnt/c/dossier`, `/cygdrive/c/dossier`) sont acceptés, y compris dans les en-têtes `@@@` du patch.
+
+Tests : `FEDIT=chemin/fedit ./test.sh` (bash ; fichiers jetables).
 
 `cat` affiche un fichier en UTF-8, fins de ligne LF, sans BOM (le format détecté va sur stderr) ; `A-B` limite aux lignes demandées et `-n` numérote.
