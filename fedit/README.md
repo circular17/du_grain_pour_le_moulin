@@ -4,7 +4,9 @@ Outil en ligne de commande qui applique des remplacements de texte littéraux
 en **préservant le format du fichier** : BOM, UTF-8 ou Windows-1252, fins de
 ligne LF/CRLF et absence de saut de ligne final.
 
-Compilation (FreePascal) : `fpc -O2 -Xs fedit.pas`
+Compilation (FreePascal) : `fpc -O2 -Xs -WR fedit.pas`
+
+`-WR` ajoute la table de relocation : sans elle, Windows refuse de lancer l'exécutable quand l'ASLR obligatoire est activé (« Repositionnement de DLL système non autorisé »).
 
 ```
 fedit info FICHIER...
