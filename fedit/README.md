@@ -6,6 +6,8 @@ ligne LF/CRLF et absence de saut de ligne final.
 
 Compilation (FreePascal) : `fpc -O2 -Xs -WR fedit.pas`
 
+Sous Linux : `fpc -O2 -Xs fedit.pas` (testé avec FPC 3.2.2 sous Ubuntu/WSL ; l'option `-WR` ne concerne que Windows).
+
 `-WR` ajoute la table de relocation : sans elle, Windows refuse de lancer l'exécutable quand l'ASLR obligatoire est activé (« Repositionnement de DLL système non autorisé »).
 
 ```
