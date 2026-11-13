@@ -24,8 +24,10 @@ program fedit;
 }
 
 {$mode objfpc}{$H+}
+{$POINTERMATH ON}
 
 uses
+  {$IFDEF UNIX}cwstring,{$ENDIF}
   SysUtils, Classes, StrUtils;
 
 type
@@ -47,7 +49,7 @@ type
 
   { All blocks targeting one file. }
   TFilePatch = record
-    Path: string;
+    Path: UnicodeString;
     Blocks: array of TBlock;
   end;
 
@@ -61,18 +63,147 @@ const
     0, $2018, $2019, $201C, $201D, $2022, $2013, $2014,
     $02DC, $2122, $0161, $203A, $0153, 0, $017E, $0178);
 
-{ Prints an error on stderr and stops with exit code 2. }
-procedure Fail(const Msg: string);
+{ Writes raw bytes to an OS handle (stdout/stderr) with no code page conversion. }
+procedure WriteBytesTo(Handle: THandle; const Data: RawByteString);
+var
+  Stream: THandleStream;
 begin
-  WriteLn(StdErr, 'fedit: ', Msg);
+  if Length(Data) = 0 then
+    Exit;
+  Stream := THandleStream.Create(Handle);
+  try
+    Stream.WriteBuffer(Data[1], Length(Data));
+  finally
+    Stream.Free;
+  end;
+end;
+
+{ Encodes UTF-16 text as UTF-8 raw bytes (surrogate pairs handled), then appends a line feed. }
+function LineBytes(const Msg: UnicodeString): RawByteString;
+var
+  I, N, Count: Integer;
+  C, Low: Cardinal;
+
+  { Appends one byte to Result. }
+  procedure Put(B: Cardinal);
+  begin
+    Inc(Count);
+    Result[Count] := Chr(B and $FF);
+  end;
+
+begin
+  N := Length(Msg);
+  SetLength(Result, N * 3 + 1);
+  Count := 0;
+  I := 1;
+  while I <= N do
+  begin
+    C := Ord(Msg[I]);
+    Inc(I);
+    if (C >= $D800) and (C <= $DBFF) and (I <= N) then
+    begin
+      Low := Ord(Msg[I]);
+      if (Low >= $DC00) and (Low <= $DFFF) then
+      begin
+        C := $10000 + ((C - $D800) shl 10) + (Low - $DC00);
+        Inc(I);
+      end;
+    end;
+    if C < $80 then
+      Put(C)
+    else if C < $800 then
+    begin
+      Put($C0 or (C shr 6));
+      Put($80 or (C and $3F));
+    end
+    else if C < $10000 then
+    begin
+      Put($E0 or (C shr 12));
+      Put($80 or ((C shr 6) and $3F));
+      Put($80 or (C and $3F));
+    end
+    else
+    begin
+      Put($F0 or (C shr 18));
+      Put($80 or ((C shr 12) and $3F));
+      Put($80 or ((C shr 6) and $3F));
+      Put($80 or (C and $3F));
+    end;
+  end;
+  Put(10);
+  SetLength(Result, Count);
+end;
+
+{ Prints a line on stdout, encoded as UTF-8. }
+procedure PrintLn(const Msg: UnicodeString);
+begin
+  WriteBytesTo(StdOutputHandle, LineBytes(Msg));
+end;
+
+{ Prints a line on stderr, encoded as UTF-8. }
+procedure ErrLn(const Msg: UnicodeString);
+begin
+  WriteBytesTo(StdErrorHandle, LineBytes(Msg));
+end;
+
+{ Prints an error on stderr and stops with exit code 2. }
+procedure Fail(const Msg: UnicodeString);
+begin
+  ErrLn('fedit: ' + Msg);
   Halt(2);
 end;
 
-{ On Windows, turns POSIX-style drive paths (/c/dir, /mnt/c/dir, /cygdrive/c/dir) into C:\dir. }
-function ResolvePath(const Path: string): string;
 var
-  Prefix: string;
-  Rest: string;
+  Args: array of UnicodeString;
+
+{$IFDEF MSWINDOWS}
+type
+  PWideCharList = ^PWideChar;
+
+function GetCommandLineW: PWideChar; stdcall; external 'kernel32.dll' name 'GetCommandLineW';
+function CommandLineToArgvW(CmdLine: PWideChar; var NumArgs: LongInt): PWideCharList;
+  stdcall; external 'shell32.dll' name 'CommandLineToArgvW';
+{$ENDIF}
+
+{ Fills Args (index 0 = program) with the command line as Unicode strings. }
+procedure LoadArgs;
+var
+  I, Count: LongInt;
+  {$IFDEF MSWINDOWS}
+  List: PWideCharList;
+  {$ENDIF}
+begin
+  {$IFDEF MSWINDOWS}
+  List := CommandLineToArgvW(GetCommandLineW, Count);
+  SetLength(Args, Count);
+  for I := 0 to Count - 1 do
+    Args[I] := UnicodeString(List[I]);
+  {$ELSE}
+  Count := ParamCount + 1;
+  SetLength(Args, Count);
+  for I := 0 to Count - 1 do
+    Args[I] := UTF8Decode(ParamStr(I));
+  {$ENDIF}
+end;
+
+{ Number of command-line arguments after the program name. }
+function ArgCount: Integer;
+begin
+  Result := Length(Args) - 1;
+end;
+
+{ Command-line argument number Index (1 = first), as a Unicode string. }
+function Arg(Index: Integer): UnicodeString;
+begin
+  Result := Args[Index];
+end;
+
+{ On Windows, turns POSIX-style drive paths (/c/dir, /mnt/c/dir, /cygdrive/c/dir) into C:\dir. }
+function ResolvePath(const Path: UnicodeString): UnicodeString;
+var
+  Prefix: UnicodeString;
+  Rest: UnicodeString;
+  Letter: WideChar;
 begin
   Result := Path;
   {$IFDEF MSWINDOWS}
@@ -82,35 +213,39 @@ begin
   else if Copy(Path, 1, 10) = '/cygdrive/' then
     Prefix := '/cygdrive';
   Rest := Copy(Path, Length(Prefix) + 1, Length(Path));
-  if (Length(Rest) >= 2) and (Rest[1] = '/') and (UpCase(Rest[2]) in ['A'..'Z'])
-    and ((Length(Rest) = 2) or (Rest[3] = '/')) then
-    Result := UpCase(Rest[2]) + ':' + StringReplace(Copy(Rest, 3, Length(Rest)), '/', '\', [rfReplaceAll]);
+  if (Length(Rest) >= 2) and (Rest[1] = '/') then
+  begin
+    Letter := Rest[2];
+    if (Letter >= 'a') and (Letter <= 'z') then
+      Letter := WideChar(Ord(Letter) - 32);
+    if (Letter >= 'A') and (Letter <= 'Z') and ((Length(Rest) = 2) or (Rest[3] = '/')) then
+      Result := UnicodeString(Letter) + ':' + UnicodeStringReplace(Copy(Rest, 3, Length(Rest)), '/', '\', [rfReplaceAll]);
+  end;
   {$ENDIF}
 end;
 
-{ Converts a path read from the (UTF-8) patch into the system's string encoding, as ParamStr gives. }
-function Utf8PathToSystem(const Path: RawByteString): string;
-begin
-  Result := string(UTF8Decode(Path));
-end;
-
-{ Reads a whole file as raw bytes. }
-function ReadAllBytes(const PathArg: string): RawByteString;
+{ Reads a whole file as raw bytes (Unicode path, wide OS calls). }
+function ReadAllBytes(const PathArg: UnicodeString): RawByteString;
 var
-  Stream: TFileStream;
-  Path: string;
+  Stream: THandleStream;
+  Handle: THandle;
+  Path: UnicodeString;
 begin
   Result := '';
   Path := ResolvePath(PathArg);
   if not FileExists(Path) then
     Fail('file not found: ' + Path);
-  Stream := TFileStream.Create(Path, fmOpenRead or fmShareDenyNone);
+  Handle := FileOpen(Path, fmOpenRead or fmShareDenyNone);
+  if Handle = THandle(-1) then
+    Fail('cannot open: ' + Path);
+  Stream := THandleStream.Create(Handle);
   try
     SetLength(Result, Stream.Size);
     if Stream.Size > 0 then
       Stream.ReadBuffer(Result[1], Stream.Size);
   finally
     Stream.Free;
+    FileClose(Handle);
   end;
 end;
 
@@ -140,16 +275,21 @@ begin
 end;
 
 { Writes raw bytes to a file, replacing its content. }
-procedure WriteAllBytes(const Path: string; const Data: RawByteString);
+procedure WriteAllBytes(const Path: UnicodeString; const Data: RawByteString);
 var
-  Stream: TFileStream;
+  Stream: THandleStream;
+  Handle: THandle;
 begin
-  Stream := TFileStream.Create(Path, fmCreate);
+  Handle := FileCreate(Path);
+  if Handle = THandle(-1) then
+    Fail('cannot write: ' + Path);
+  Stream := THandleStream.Create(Handle);
   try
     if Length(Data) > 0 then
       Stream.WriteBuffer(Data[1], Length(Data));
   finally
     Stream.Free;
+    FileClose(Handle);
   end;
 end;
 
@@ -400,7 +540,7 @@ begin
         begin
           Inc(FileCount);
           SetLength(Result, FileCount);
-          Result[FileCount - 1].Path := ResolvePath(Utf8PathToSystem(Trim(Copy(Line, 5, Length(Line)))));
+          Result[FileCount - 1].Path := ResolvePath(UTF8Decode(Trim(Copy(Line, 5, Length(Line)))));
           HaveFile := True;
         end
         else if Copy(Line, 1, 4) = '<<<<' then
@@ -499,10 +639,10 @@ begin
 end;
 
 { Runs a shell command; returns its exit code. }
-function RunShell(const CommandLine: string): Integer;
+function RunShell(const CommandLine: UnicodeString): Integer;
 begin
   {$IFDEF MSWINDOWS}
-  Result := ExecuteProcess(GetEnvironmentVariable('COMSPEC'), '/c "' + CommandLine + '"');
+  Result := ExecuteProcess(UnicodeString(GetEnvironmentVariable('COMSPEC')), '/c "' + CommandLine + '"');
   {$ELSE}
   Result := ExecuteProcess('/bin/sh', ['-c', CommandLine]);
   {$ENDIF}
@@ -515,18 +655,18 @@ var
   Raw, Body: RawByteString;
   Fmt: TFileFormat;
 begin
-  if ParamCount < 2 then
+  if ArgCount < 2 then
     Fail('info: no file given');
-  for I := 2 to ParamCount do
+  for I := 2 to ArgCount do
   begin
-    Raw := ReadAllBytes(ParamStr(I));
+    Raw := ReadAllBytes(Arg(I));
     DetectFormat(Raw, Fmt, Body);
-    WriteLn(ParamStr(I), ': ', FormatName(Fmt));
+    PrintLn(Arg(I) + ': ' + FormatName(Fmt));
   end;
 end;
 
 { Parses a line range "A-B", "A-", "-B" or "A" into 1-based bounds (High = open end). }
-procedure ParseRange(const Spec: string; out First, Last: Integer);
+procedure ParseRange(const Spec: UnicodeString; out First, Last: Integer);
 var
   Dash: Integer;
 begin
@@ -554,22 +694,21 @@ procedure CmdCat;
 var
   First, Last, ArgIndex, LineNumber, Start, Stop: Integer;
   ShowNumbers: Boolean;
-  Path, RangeSpec: string;
+  Path, RangeSpec: UnicodeString;
   Raw, Body, Output: RawByteString;
   Fmt: TFileFormat;
-  Stream: THandleStream;
 begin
   ShowNumbers := False;
   Path := '';
   RangeSpec := '';
-  for ArgIndex := 2 to ParamCount do
+  for ArgIndex := 2 to ArgCount do
   begin
-    if ParamStr(ArgIndex) = '-n' then
+    if Arg(ArgIndex) = '-n' then
       ShowNumbers := True
     else if Path = '' then
-      Path := ParamStr(ArgIndex)
+      Path := Arg(ArgIndex)
     else
-      RangeSpec := ParamStr(ArgIndex);
+      RangeSpec := Arg(ArgIndex);
   end;
   if Path = '' then
     Fail('cat: no file given');
@@ -582,7 +721,7 @@ begin
   Body := ReplaceAll(Body, #13#10, #10);
   if Fmt.IsCp1252 then
     Body := Cp1252ToUtf8(Body);
-  WriteLn(StdErr, '# ', FormatName(Fmt));
+  ErrLn('# ' + FormatName(Fmt));
   Output := '';
   LineNumber := 1;
   Start := 1;
@@ -600,15 +739,7 @@ begin
     Inc(LineNumber);
     Start := Stop + 1;
   end;
-  if Length(Output) > 0 then
-  begin
-    Stream := THandleStream.Create(StdOutputHandle);
-    try
-      Stream.WriteBuffer(Output[1], Length(Output));
-    finally
-      Stream.Free;
-    end;
-  end;
+  WriteBytesTo(StdOutputHandle, Output);
 end;
 
 { Applies a patch file: all-or-nothing, format preserving. }
@@ -616,7 +747,7 @@ procedure CmdApply;
 var
   I, J, K, ArgIndex: Integer;
   DryRun: Boolean;
-  CheckCmd, PatchPath: string;
+  CheckCmd, PatchPath: UnicodeString;
   PatchText, Raw, Body, OldText, NewText, Original: RawByteString;
   Patches: TFilePatchArray;
   Fmt: TFileFormat;
@@ -628,19 +759,19 @@ begin
   CheckCmd := '';
   PatchPath := '';
   ArgIndex := 2;
-  while ArgIndex <= ParamCount do
+  while ArgIndex <= ArgCount do
   begin
-    if ParamStr(ArgIndex) = '--dry-run' then
+    if Arg(ArgIndex) = '--dry-run' then
       DryRun := True
-    else if ParamStr(ArgIndex) = '--check' then
+    else if Arg(ArgIndex) = '--check' then
     begin
       Inc(ArgIndex);
-      if ArgIndex > ParamCount then
+      if ArgIndex > ArgCount then
         Fail('--check needs a command');
-      CheckCmd := ParamStr(ArgIndex);
+      CheckCmd := Arg(ArgIndex);
     end
     else
-      PatchPath := ParamStr(ArgIndex);
+      PatchPath := Arg(ArgIndex);
     Inc(ArgIndex);
   end;
   if PatchPath = '' then
@@ -670,8 +801,8 @@ begin
         if not Utf8ToCp1252(Patches[I].Blocks[J].OldText, OldText)
           or not Utf8ToCp1252(Patches[I].Blocks[J].NewText, NewText) then
         begin
-          WriteLn(StdErr, Format('%s: block at patch line %d has a character not representable in cp1252',
-            [Patches[I].Path, Patches[I].Blocks[J].Line]));
+          ErrLn(Patches[I].Path + ': block at patch line ' + IntToStr(Patches[I].Blocks[J].Line)
+            + ' has a character not representable in cp1252');
           Failed := True;
           Continue;
         end;
@@ -679,8 +810,8 @@ begin
       Found := CountOccurrences(Body, OldText);
       if Found <> Patches[I].Blocks[J].Expected then
       begin
-        WriteLn(StdErr, Format('%s: block at patch line %d found %d time(s), expected %d',
-          [Patches[I].Path, Patches[I].Blocks[J].Line, Found, Patches[I].Blocks[J].Expected]));
+        ErrLn(Patches[I].Path + ': block at patch line ' + IntToStr(Patches[I].Blocks[J].Line)
+          + ' found ' + IntToStr(Found) + ' time(s), expected ' + IntToStr(Patches[I].Blocks[J].Expected));
         Failed := True;
         Continue;
       end;
@@ -688,34 +819,34 @@ begin
     end;
     Outputs[I] := Rebuild(Fmt, Body);
     ChangedLines(Original, Body, Removed, Added);
-    WriteLn(Format('%s [%s]: %d block(s), -%d/+%d lines',
-      [Patches[I].Path, FormatName(Fmt), Length(Patches[I].Blocks), Removed, Added]));
+    PrintLn(Patches[I].Path + ' [' + FormatName(Fmt) + ']: ' + IntToStr(Length(Patches[I].Blocks))
+      + ' block(s), -' + IntToStr(Removed) + '/+' + IntToStr(Added) + ' lines');
   end;
   if Failed then
   begin
-    WriteLn(StdErr, 'fedit: nothing written');
+    ErrLn('fedit: nothing written');
     Halt(2);
   end;
   if DryRun then
   begin
-    WriteLn('dry run: nothing written');
+    PrintLn('dry run: nothing written');
     Exit;
   end;
   for I := 0 to High(Patches) do
     WriteAllBytes(Patches[I].Path, Outputs[I]);
-  WriteLn('written.');
+  PrintLn('written.');
   if CheckCmd <> '' then
     for I := 0 to High(Patches) do
     begin
-      K := RunShell(StringReplace(CheckCmd, '{}', '"' + Patches[I].Path + '"', [rfReplaceAll]));
+      K := RunShell(UnicodeStringReplace(CheckCmd, '{}', '"' + Patches[I].Path + '"', [rfReplaceAll]));
       if K <> 0 then
       begin
-        WriteLn(StdErr, Format('fedit: check failed (exit %d) for %s', [K, Patches[I].Path]));
+        ErrLn('fedit: check failed (exit ' + IntToStr(K) + ') for ' + Patches[I].Path);
         Halt(3);
       end;
     end;
   if CheckCmd <> '' then
-    WriteLn('check ok.');
+    PrintLn('check ok.');
 end;
 
 { Prints usage. }
@@ -736,18 +867,23 @@ begin
   WriteLn('Preserves BOM, UTF-8/cp1252, LF/CRLF. All-or-nothing.');
 end;
 
+var
+  Command: string;
+
 begin
-  if ParamCount < 1 then
+  LoadArgs;
+  if ArgCount < 1 then
   begin
     CmdHelp;
     Halt(1);
   end;
-  case LowerCase(ParamStr(1)) of
+  Command := LowerCase(string(Arg(1)));
+  case Command of
     'info': CmdInfo;
     'cat': CmdCat;
     'apply': CmdApply;
     'help', '--help', '-h': CmdHelp;
   else
-    Fail('unknown command: ' + ParamStr(1));
+    Fail('unknown command: ' + Arg(1));
   end;
 end.
